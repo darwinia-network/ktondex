@@ -1,6 +1,10 @@
 use anyhow::Context;
 
-use crate::{config::RuntimeConfig, planner::plan_dip7_log_queries};
+use crate::{
+    checkpoint::{Checkpoint, plan_next_range},
+    config::{ChainConfig, FinalityMode, RuntimeConfig},
+    planner::{EVM_LOGS_DATASET, PlannedDatalensLogQuery, plan_dip7_log_queries},
+};
 
 pub async fn run(run_once: bool) -> anyhow::Result<()> {
     let config = RuntimeConfig::from_env().context("load DIP7 indexer runtime config")?;
@@ -18,13 +22,7 @@ pub async fn run(run_once: bool) -> anyhow::Result<()> {
     );
 
     for chain in &config.enabled_chains {
-        let plans = plan_dip7_log_queries(
-            chain.chain_id,
-            chain.start_block,
-            chain.start_block,
-            chain.batch_size,
-            chain.finality_mode,
-        )?;
+        let plans = plan_startup_log_queries(chain, chain.finality_mode)?;
         log::info!(
             "planned DIP7 Datalens query chain_id={} start_block={} dataset={} contracts={} topics={}",
             chain.chain_id,
@@ -36,6 +34,28 @@ pub async fn run(run_once: bool) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+pub fn plan_startup_log_queries(
+    chain: &ChainConfig,
+    finality_mode: FinalityMode,
+) -> anyhow::Result<Vec<PlannedDatalensLogQuery>> {
+    let range = plan_next_range(
+        &Checkpoint {
+            chain_id: chain.chain_id,
+            dataset: EVM_LOGS_DATASET.to_owned(),
+            next_block: chain.start_block,
+        },
+        chain.batch_size,
+    )?;
+
+    plan_dip7_log_queries(
+        chain.chain_id,
+        range.from_block,
+        range.to_block,
+        chain.batch_size,
+        finality_mode,
+    )
 }
 
 pub async fn migrate() -> anyhow::Result<()> {
